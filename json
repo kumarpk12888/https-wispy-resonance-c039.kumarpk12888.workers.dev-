@@ -1,0 +1,15 @@
+{
+  "name": "wispy-resonance-c039",
+  "main": "doctors.js",
+  "compatibility_date": "2026-08-02",
+  "kv_namespaces": [
+    {
+      "binding": "KV_BINDING",
+      "id": "e13f5180b5134a97b469516eba42561a"
+    }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  }
+}
