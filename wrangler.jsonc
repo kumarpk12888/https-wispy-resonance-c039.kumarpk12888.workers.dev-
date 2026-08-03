@@ -7,5 +7,9 @@
       "binding": "KV_BINDING",
       "id": "e13f5180b5134a97b469516eba42561a"
     }
-  ]
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  }
 }
