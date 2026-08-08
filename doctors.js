@@ -138,9 +138,12 @@ export default {
         body: form.toString(),
       });
 
-      const imData = await imRes.json().catch(() => null);
+      const imRawText = await imRes.text();
+      let imData = null;
+      try { imData = JSON.parse(imRawText); } catch (e) {}
+
       if (!imRes.ok || !imData || !imData.success || !imData.payment_request) {
-        return json({ error: "Could not create payment request", details: imData }, 500);
+        return json({ error: "Could not create payment request", status: imRes.status, raw: imRawText.slice(0, 500) }, 500);
       }
 
       pendingDoctor.paymentRequestId = imData.payment_request.id;
@@ -766,13 +769,7 @@ const PUBLIC_HTML = `<!DOCTYPE html>
       if(data.success && data.paymentUrl){
         window.location.href = data.paymentUrl;
       } else {
-        alert(data.error || "Could not start payment, please try again.");
-        try {
-          var eb = document.createElement('div');
-          eb.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#3A2C05;color:#fff;padding:12px;font-size:11px;z-index:9999;white-space:pre-wrap;max-height:40vh;overflow:auto;';
-          eb.textContent = 'INSTAMOJO DETAILS: ' + JSON.stringify(data.details);
-          document.body.appendChild(eb);
-        } catch(errShow) {}
+        alert("ERROR: " + JSON.stringify(data));
       }
     }catch(e){
       alert("Network error, please try again.");
