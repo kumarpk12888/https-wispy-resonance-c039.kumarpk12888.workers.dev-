@@ -89,6 +89,122 @@ export default {
     }
 
     // =========================================================
+    // INSTAMOJO: create payment request + verify payment
+    // =========================================================
+
+    if (path === "/api/instamojo/create-request" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (!body || !body.plan) return json({ error: "Missing plan" }, 400);
+
+      const amountINR = body.plan === "yearly" ? PAYMENT_CONFIG.yearlyFeeINR : PAYMENT_CONFIG.monthlyFeeINR;
+      const doctorId = crypto.randomUUID();
+
+      const pendingDoctor = {
+        id: doctorId,
+        name: (body.name || "").trim(),
+        spec: (body.spec || "").trim(),
+        exp: (body.exp || "").trim(),
+        clinic: (body.clinic || "").trim(),
+        city: (body.city || "").trim(),
+        country: (body.country || "").trim(),
+        fee: Number(body.fee),
+        currency: (body.currency || "").trim(),
+        phone: (body.phone || "").replace(/[^\d+]/g, ""),
+        plan: body.plan,
+        status: "awaiting_payment",
+        createdAt: Date.now(),
+      };
+      await env.DOCTORS_KV.put(`pending:${doctorId}`, JSON.stringify(pendingDoctor));
+
+      const redirectUrl = `${url.origin}/payment-return?doctorId=${doctorId}`;
+      const form = new URLSearchParams({
+        purpose: `DocSlot listing — ${body.plan} plan`,
+        amount: String(amountINR),
+        buyer_name: pendingDoctor.name || "DocSlot user",
+        phone: pendingDoctor.phone || "",
+        redirect_url: redirectUrl,
+        send_email: "false",
+        send_sms: "false",
+        allow_repeated_payments: "false",
+      });
+
+      const imRes = await fetch("https://www.instamojo.com/api/1.1/payment-requests/", {
+        method: "POST",
+        headers: {
+          "X-Api-Key": env.INSTAMOJO_API_KEY,
+          "X-Auth-Token": env.INSTAMOJO_AUTH_TOKEN,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: form.toString(),
+      });
+
+      const imData = await imRes.json().catch(() => null);
+      if (!imRes.ok || !imData || !imData.success || !imData.payment_request) {
+        return json({ error: "Could not create payment request", details: imData }, 500);
+      }
+
+      pendingDoctor.paymentRequestId = imData.payment_request.id;
+      await env.DOCTORS_KV.put(`pending:${doctorId}`, JSON.stringify(pendingDoctor));
+
+      return json({ success: true, paymentUrl: imData.payment_request.longurl, doctorId });
+    }
+
+    if (path === "/api/instamojo/verify" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (!body || !body.doctorId) return json({ error: "Missing doctorId" }, 400);
+
+      const raw = await env.DOCTORS_KV.get(`pending:${body.doctorId}`);
+      if (!raw) return json({ error: "Not found" }, 404);
+      const pending = JSON.parse(raw);
+      if (!pending.paymentRequestId) return json({ error: "No payment request" }, 400);
+
+      const imRes = await fetch(`https://www.instamojo.com/api/1.1/payment-requests/${pending.paymentRequestId}/`, {
+        headers: {
+          "X-Api-Key": env.INSTAMOJO_API_KEY,
+          "X-Auth-Token": env.INSTAMOJO_AUTH_TOKEN,
+        },
+      });
+      const imData = await imRes.json().catch(() => null);
+
+      if (!imRes.ok || !imData || !imData.success) return json({ paid: false });
+
+      const pr = imData.payment_request;
+      const payments = pr.payments || [];
+      const successfulPayment = payments.find((p) => p.status === "Credit");
+
+      if (successfulPayment || pr.status === "Completed") {
+        const planDays = pending.plan === "yearly" ? 365 : 30;
+        const doctor = {
+          id: pending.id,
+          name: pending.name,
+          spec: pending.spec,
+          exp: pending.exp,
+          clinic: pending.clinic,
+          city: pending.city,
+          country: pending.country,
+          fee: pending.fee,
+          currency: pending.currency,
+          phone: pending.phone,
+          rating: 5.0,
+          token: "T-" + Math.floor(Math.random() * 30 + 1),
+          plan: pending.plan,
+          txnId: successfulPayment ? successfulPayment.payment_id : pending.paymentRequestId,
+          paymentVerified: true,
+          status: "pending",
+          createdAt: pending.createdAt,
+          approvedAt: null,
+          expiresAt: null,
+          planDays,
+        };
+        await env.DOCTORS_KV.put(`doctor:${pending.id}`, JSON.stringify(doctor));
+        await env.DOCTORS_KV.delete(`pending:${pending.id}`);
+        return json({ paid: true });
+      }
+
+      return json({ paid: false, status: pr.status });
+    }
+
+    // =========================================================
     // ADMIN API (password protected)
     // =========================================================
 
@@ -209,6 +325,13 @@ export default {
     // =========================================================
     // FRONTEND PAGES
     // =========================================================
+
+    if (path === "/payment-return") {
+      const doctorId = url.searchParams.get("doctorId") || "";
+      return new Response(PAYMENT_RETURN_HTML.replace("__DOCTOR_ID__", doctorId), {
+        headers: { "content-type": "text/html;charset=UTF-8" },
+      });
+    }
 
     if (path === "/admin" || path === "/admin/") {
       return new Response(ADMIN_HTML, { headers: { "content-type": "text/html;charset=UTF-8" } });
@@ -408,7 +531,7 @@ const PUBLIC_HTML = `<!DOCTYPE html>
 
       <div class="pay-box" id="payBox">Loading payment details...</div>
 
-      <div class="field"><label>Payment transaction / reference ID</label><input type="text" id="regTxnId" placeholder="Paste your UPI/PayPal/bank transaction ID"></div>
+      <div class="pay-box" style="margin-top:16px;"><b>You'll be redirected to Instamojo</b> to pay securely via UPI, card, or netbanking. Your listing is submitted automatically once payment is confirmed.</div>
 
       <div class="field"><label>Doctor's name</label><input type="text" id="regName" placeholder="Dr. Full Name"></div>
       <div class="field"><label>Specialty</label><input type="text" id="regSpec" placeholder="e.g. General Physician, Dentist, Dermatologist"></div>
@@ -439,7 +562,7 @@ const PUBLIC_HTML = `<!DOCTYPE html>
       </div>
       <div class="field"><label>WhatsApp number (with country code, e.g. +1, +44, +91)</label><input type="tel" id="regPhone" placeholder="+countrycode number"></div>
 
-      <button class="submit-btn" onclick="submitDoctor()">Submit for review</button>
+      <button class="submit-btn" onclick="submitDoctor()">Pay & Submit for review</button>
       <div class="success-msg" id="successMsg">✓ Submitted! Your listing will go live once your payment is verified.</div>
       <div class="form-note">Listings are reviewed manually before going live — this protects patients from fake entries.</div>
     </div>
@@ -616,10 +739,9 @@ const PUBLIC_HTML = `<!DOCTYPE html>
       currency: document.getElementById("regCurrency").value,
       phone: document.getElementById("regPhone").value.trim(),
       plan: selectedPlan,
-      txnId: document.getElementById("regTxnId").value.trim(),
     };
-    if(!payload.name || !payload.spec || !payload.clinic || !payload.city || !payload.country || !payload.fee || !payload.phone || !payload.txnId){
-      alert("Please fill in all fields, including your payment transaction ID.");
+    if(!payload.name || !payload.spec || !payload.clinic || !payload.city || !payload.country || !payload.fee || !payload.phone){
+      alert("Please fill in all fields.");
       return;
     }
     if(!payload.phone.startsWith('+')){
@@ -627,18 +749,16 @@ const PUBLIC_HTML = `<!DOCTYPE html>
       return;
     }
     try{
-      const res = await fetch('/api/doctors', {
+      const res = await fetch('/api/instamojo/create-request', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if(data.success){
-        document.getElementById("successMsg").classList.add("show");
-        ['regName','regSpec','regExp','regClinic','regCity','regCountry','regFee','regPhone','regTxnId'].forEach(id=>document.getElementById(id).value='');
-        await loadDoctors();
+      if(data.success && data.paymentUrl){
+        window.location.href = data.paymentUrl;
       } else {
-        alert(data.error || "Something went wrong, please try again.");
+        alert(data.error || "Could not start payment, please try again.");
       }
     }catch(e){
       alert("Network error, please try again.");
@@ -654,6 +774,60 @@ const PUBLIC_HTML = `<!DOCTYPE html>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
   }
+</script>
+</body>
+</html>`;
+
+// =========================================================
+// PAYMENT RETURN PAGE — verifies Instamojo payment and shows result
+// =========================================================
+const PAYMENT_RETURN_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verifying payment — DocSlot</title>
+<style>
+  body{ font-family:sans-serif; background:#F7F4EC; color:#16211F; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; text-align:center; padding:20px; }
+  .box{ max-width:420px; }
+  h2{ color:#0F3D3E; }
+  .spinner{ width:36px; height:36px; border:4px solid #DCD5C2; border-top-color:#0F3D3E; border-radius:50%; margin:20px auto; animation:spin 0.8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  a{ color:#0F3D3E; font-weight:600; }
+  .success{ color:#1F5E32; }
+  .fail{ color:#C0392B; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h2 id="title">Verifying your payment...</h2>
+  <div class="spinner" id="spinner"></div>
+  <p id="msg">Please wait a moment.</p>
+  <p><a href="/">Back to DocSlot</a></p>
+</div>
+<script>
+  const doctorId = "__DOCTOR_ID__";
+  async function verify(){
+    try{
+      const res = await fetch('/api/instamojo/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({doctorId}) });
+      const data = await res.json();
+      document.getElementById('spinner').style.display='none';
+      if(data.paid){
+        document.getElementById('title').textContent = '✓ Payment successful!';
+        document.getElementById('title').className = 'success';
+        document.getElementById('msg').textContent = 'Your listing has been submitted and will go live after a quick review.';
+      } else {
+        document.getElementById('title').textContent = 'Payment not completed';
+        document.getElementById('title').className = 'fail';
+        document.getElementById('msg').textContent = 'If you completed the payment, please wait a minute and refresh this page.';
+      }
+    }catch(e){
+      document.getElementById('spinner').style.display='none';
+      document.getElementById('title').textContent = 'Something went wrong';
+      document.getElementById('msg').textContent = 'Please contact support if the amount was deducted.';
+    }
+  }
+  verify();
 </script>
 </body>
 </html>`;
@@ -799,7 +973,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
           Fee: \${d.fee} \${d.currency} · Plan: \${d.plan} · WhatsApp: \${d.phone}<br>
           Submitted: \${new Date(d.createdAt).toLocaleDateString()} · Expires: \${expiry}
         </div>
-        <div class="txn-box mono">Txn ID: \${d.txnId}</div>
+        <div class="txn-box mono">\${d.paymentVerified ? '✓ Instamojo Verified — ' + d.txnId : 'Txn ID: ' + d.txnId}</div>
         <div class="actions">
           \${st==='pending' ? '<button class="btn-approve" onclick="approve(\\''+d.id+'\\')">Approve</button><button class="btn-reject" onclick="reject(\\''+d.id+'\\')">Reject</button>' : ''}
           \${st==='approved' || st==='expired' ? '<button class="btn-renew" onclick="renew(\\''+d.id+'\\')">Renew</button>' : ''}
