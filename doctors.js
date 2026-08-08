@@ -600,7 +600,7 @@ const PUBLIC_HTML = `<!DOCTYPE html>
   window.addEventListener('error', function(e){
     var b = document.createElement('div');
     b.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#C0392B;color:#fff;padding:12px;font-size:12px;z-index:9999;white-space:pre-wrap;';
-    b.textContent = 'JS ERROR: ' + e.message + ' (line ' + e.lineno + ')';
+    b.textContent = 'JS ERROR v3: ' + e.message + ' (line ' + e.lineno + ')';
     document.body.appendChild(b);
   });
 </script>
@@ -766,7 +766,7 @@ const PUBLIC_HTML = `<!DOCTYPE html>
       if(data.success && data.paymentUrl){
         window.location.href = data.paymentUrl;
       } else {
-        alert((data.error || "Could not start payment") + "\n\n" + JSON.stringify(data.details || {}));
+        alert(data.error || "Could not start payment, please try again.");
       }
     }catch(e){
       alert("Network error, please try again.");
