@@ -114,7 +114,7 @@ export default {
         status: "awaiting_payment",
         createdAt: Date.now(),
       };
-      await env.DOCTORS_KV.put(`pending:${doctorId}`, JSON.stringify(pendingDoctor));
+      await env.KV_BINDING.put(`pending:${doctorId}`, JSON.stringify(pendingDoctor));
 
       const redirectUrl = `${url.origin}/payment-return?doctorId=${doctorId}`;
       const form = new URLSearchParams({
@@ -144,7 +144,7 @@ export default {
       }
 
       pendingDoctor.paymentRequestId = imData.payment_request.id;
-      await env.DOCTORS_KV.put(`pending:${doctorId}`, JSON.stringify(pendingDoctor));
+      await env.KV_BINDING.put(`pending:${doctorId}`, JSON.stringify(pendingDoctor));
 
       return json({ success: true, paymentUrl: imData.payment_request.longurl, doctorId });
     }
@@ -153,7 +153,7 @@ export default {
       const body = await request.json().catch(() => null);
       if (!body || !body.doctorId) return json({ error: "Missing doctorId" }, 400);
 
-      const raw = await env.DOCTORS_KV.get(`pending:${body.doctorId}`);
+      const raw = await env.KV_BINDING.get(`pending:${body.doctorId}`);
       if (!raw) return json({ error: "Not found" }, 404);
       const pending = JSON.parse(raw);
       if (!pending.paymentRequestId) return json({ error: "No payment request" }, 400);
@@ -196,8 +196,8 @@ export default {
           expiresAt: null,
           planDays,
         };
-        await env.DOCTORS_KV.put(`doctor:${pending.id}`, JSON.stringify(doctor));
-        await env.DOCTORS_KV.delete(`pending:${pending.id}`);
+        await env.KV_BINDING.put(`doctor:${pending.id}`, JSON.stringify(doctor));
+        await env.KV_BINDING.delete(`pending:${pending.id}`);
         return json({ paid: true });
       }
 
