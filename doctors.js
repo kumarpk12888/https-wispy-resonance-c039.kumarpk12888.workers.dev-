@@ -758,7 +758,7 @@ const PUBLIC_HTML = `<!DOCTYPE html>
       if(data.success && data.paymentUrl){
         window.location.href = data.paymentUrl;
       } else {
-        alert(data.error || "Could not start payment, please try again.");
+        alert((data.error || "Could not start payment") + "\n\n" + JSON.stringify(data.details || {}));
       }
     }catch(e){
       alert("Network error, please try again.");
